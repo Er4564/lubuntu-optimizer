@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPT_VERSION="2.1.4"
+SCRIPT_VERSION="2.1.5"
 
 # Script version and error handling
 set -e
@@ -17,7 +17,7 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Force kill any running apt/dpkg processes and services
+    # Force kill any running apt/dpkg processes and services
 echo "🔒 Checking and stopping apt/dpkg processes and services..."
 
 # Kill any running apt/dpkg processes
