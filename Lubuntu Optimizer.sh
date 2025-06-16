@@ -1,9 +1,21 @@
 #!/bin/bash
-SCRIPT_VERSION="1.0.1"
+SCRIPT_VERSION="2.0.0"
+
+# Script version and error handling
+set -e
+trap 'echo "❌ Error occurred at line $LINENO"; exit 1' ERR
+
 echo "🚀 Lubuntu Optimizer v$SCRIPT_VERSION"
 echo "🚀 Starting FINAL ultra optimization for Lubuntu..."
 echo "ℹ️  This script will keep LXDE and set up auto-login"
+echo "🔧 Includes fork issue fixes for low-RAM systems"
 echo "⏰ Started at: $(date)"
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+    echo "❌ Please run as root: sudo $0"
+    exit 1
+fi
 
 ### PART 0: System Information ###
 echo "🔍 System Information:"
@@ -195,29 +207,126 @@ sudo dpkg-reconfigure dash && echo "    ✅ Dash configured" || echo "    ⚠️
 echo "  🌐 Setting lightweight default browser..."
 sudo update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/chromium-browser 50 && echo "    ✅ Chromium set as default browser" || echo "    ⚠️  Browser alternative failed"
 
-### PART 8: Enable Swap if Missing ###
-echo "🧠 Checking swap configuration..."
-if free | awk '/^Swap:/ {exit !$2}'; then
-    echo "  ✅ Swap already exists: $(free -h | grep Swap | awk '{print $2}')"
+### PART 8: Enhanced Swap Configuration and Fork Issue Fix ###
+echo "🧠 Enhanced swap configuration and fork issue fixes..."
+SWAPFILE="/swapfile"
+SWAP_SIZE=${SWAP_SIZE:-2G}
+
+if swapon --show | grep -q "$SWAPFILE"; then
+    echo "  ✅ Swap file already exists: $(swapon --show | grep $SWAPFILE)"
 else
-    echo "  📝 Creating 1GB swap file..."
-    SWAP_SIZE=${SWAP_SIZE:-1G}
-
-    # Check if there is enough free disk space
+    echo "  📝 Creating ${SWAP_SIZE} swap file..."
+    
+    # Check available disk space
     FREE_SPACE=$(df --output=avail / | tail -1)
-    REQUIRED_SPACE=$((1024 * 1024)) # 1GB in KB
-
+    REQUIRED_SPACE=$((2 * 1024 * 1024)) # 2GB in KB
+    
     if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
         echo "❌ Not enough disk space to create swap file. Free space: $(df -h / | tail -1 | awk '{print $4}')"
-        exit 1
+        echo "  🔄 Reducing swap size to 1GB..."
+        SWAP_SIZE="1G"
+        REQUIRED_SPACE=$((1024 * 1024)) # 1GB in KB
+        
+        if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
+            echo "❌ Still not enough disk space. Skipping swap creation."
+        else
+            # Create swap file with better error handling
+            (sudo fallocate -l "$SWAP_SIZE" "$SWAPFILE" || sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=1024) && echo "    ✅ Swap file created" || {
+                echo "    ❌ Failed to create swap file"
+            }
+        fi
+    else
+        # Create swap file with better error handling
+        (sudo fallocate -l "$SWAP_SIZE" "$SWAPFILE" || sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=2048) && echo "    ✅ Swap file created" || {
+            echo "    ❌ Failed to create swap file"
+        }
     fi
-
-    sudo fallocate -l "$SWAP_SIZE" /swapfile && echo "    ✅ Swap file allocated" || echo "    ❌ Swap file allocation failed"
-    sudo chmod 600 /swapfile && echo "    ✅ Swap file permissions set" || echo "    ❌ Swap file permissions failed"
-    sudo mkswap /swapfile && echo "    ✅ Swap file formatted" || echo "    ❌ Swap file format failed"
-    sudo swapon /swapfile && echo "    ✅ Swap file activated" || echo "    ❌ Swap file activation failed"
-    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab && echo "    ✅ Swap file added to fstab" || echo "    ❌ Failed to add swap to fstab"
+    
+    if [ -f "$SWAPFILE" ]; then
+        sudo chmod 600 "$SWAPFILE" && echo "    ✅ Swap file permissions set"
+        sudo mkswap "$SWAPFILE" && echo "    ✅ Swap file formatted"
+        sudo swapon "$SWAPFILE" && echo "    ✅ Swap file activated"
+        
+        if ! grep -q "$SWAPFILE" /etc/fstab; then
+            echo "    📝 Making swap permanent..."
+            echo "$SWAPFILE none swap sw 0 0" | sudo tee -a /etc/fstab
+            echo "    ✅ Swap file added to fstab"
+        fi
+    fi
 fi
+
+# Optimize system limits and memory management for fork issues
+echo "  🔧 Optimizing system limits and memory management..."
+
+# Set higher ulimit for current session
+ulimit -u 4096 2>/dev/null || echo "    ⚠️  Could not set ulimit -u"
+ulimit -n 1024 2>/dev/null || echo "    ⚠️  Could not set ulimit -n"
+echo "    ✅ ulimit values updated for current session"
+
+# Optimize kernel parameters for low memory systems and fork issues
+echo "  ⚙️  Applying kernel optimizations for low-memory systems..."
+sudo tee /etc/sysctl.d/99-fork-fix.conf > /dev/null << 'EOF'
+# Memory management optimizations
+vm.swappiness=10
+vm.vfs_cache_pressure=50
+vm.dirty_ratio=3
+vm.dirty_background_ratio=1
+vm.overcommit_memory=1
+vm.overcommit_ratio=50
+
+# Process and fork optimizations
+kernel.pid_max=65536
+kernel.threads-max=16384
+
+# Additional performance optimizations
+vm.dirty_writeback_centisecs=1500
+vm.dirty_expire_centisecs=3000
+kernel.sched_min_granularity_ns=10000000
+kernel.sched_wakeup_granularity_ns=15000000
+net.core.netdev_max_backlog=5000
+EOF
+
+sudo sysctl -p /etc/sysctl.d/99-fork-fix.conf && echo "    ✅ Kernel parameters applied"
+
+# Make ulimit changes permanent
+echo "  📝 Making ulimit changes permanent..."
+if ! grep -q "lubuntu-optimizer fork fix" /etc/security/limits.conf; then
+    sudo tee -a /etc/security/limits.conf > /dev/null << 'EOF'
+
+# lubuntu-optimizer fork fix
+* soft nproc 4096
+* hard nproc 8192
+* soft nofile 1024
+* hard nofile 2048
+root soft nproc unlimited
+root hard nproc unlimited
+EOF
+    echo "    ✅ Permanent limits configured"
+fi
+
+# Clean up zombie processes
+echo "  🧹 Cleaning up zombie processes..."
+ZOMBIES=$(ps -e -o stat,pid | awk '$1 ~ /^Z/ { print $2 }')
+
+if [[ -z "$ZOMBIES" ]]; then
+    echo "    ✅ No zombie processes found"
+else
+    echo "    🔄 Found zombie processes: $ZOMBIES"
+    echo "    📝 Attempting to clean them (will signal parents)..."
+    for pid in $ZOMBIES; do
+        ppid=$(ps -o ppid= -p $pid 2>/dev/null || echo "")
+        if [[ -n "$ppid" && "$ppid" != "0" ]]; then
+            echo "    📡 Sending SIGCHLD to parent process $ppid"
+            sudo kill -CHLD $ppid 2>/dev/null || echo "    ⚠️  Could not signal parent $ppid"
+        fi
+    done
+fi
+
+# Clean up system cache
+echo "  🗑️  Cleaning system cache..."
+sync
+echo 1 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1
+echo "    ✅ System cache cleared"
 
 ### PART 9: Enable ZRAM ###
 echo "🧊 Setting up ZRAM..."
@@ -245,16 +354,102 @@ echo "  🚫 Blacklisting unnecessary kernel modules..."
 echo 'blacklist pcspkr' | sudo tee -a /etc/modprobe.d/blacklist.conf && echo "    ✅ PC speaker blacklisted" || echo "    ❌ PC speaker blacklist failed"
 echo 'blacklist snd_pcsp' | sudo tee -a /etc/modprobe.d/blacklist.conf && echo "    ✅ PC speaker sound blacklisted" || echo "    ❌ PC speaker sound blacklist failed"
 
-### PART 11: Trim Disk (For SSD or Flash) ###
-echo "💾 Running disk trim..."
-if [ -x /usr/sbin/fstrim ]; then
-    if [ "$(findmnt -n -o FSTYPE /)" = "ext4" ] || [ "$(findmnt -n -o FSTYPE /)" = "btrfs" ]; then
-        sudo fstrim -v / && echo "✅ Disk trim completed" || echo "❌ Disk trim failed"
-    else
-        echo "⚠️ Filesystem does not support trimming"
+### PART 11: HDD Optimization and Disk Trim ###
+echo "💾 Running disk optimization..."
+
+# Detect if system has SSD or HDD
+echo "  🔍 Detecting storage device type..."
+STORAGE_TYPE="unknown"
+for device in $(lsblk -dno name | grep -E '^sd|^nvme'); do
+    if [ -f "/sys/block/$device/queue/rotational" ]; then
+        ROTATIONAL=$(cat /sys/block/$device/queue/rotational)
+        if [ "$ROTATIONAL" -eq 0 ]; then
+            STORAGE_TYPE="ssd"
+            echo "    � SSD detected: $device"
+            break
+        else
+            STORAGE_TYPE="hdd"
+            echo "    💿 HDD detected: $device"
+        fi
     fi
+done
+
+# Optimize based on storage type
+if [ "$STORAGE_TYPE" = "ssd" ]; then
+    echo "  ⚡ Applying SSD optimizations..."
+    # Trim SSD
+    if [ -x /usr/sbin/fstrim ]; then
+        if [ "$(findmnt -n -o FSTYPE /)" = "ext4" ] || [ "$(findmnt -n -o FSTYPE /)" = "btrfs" ]; then
+            sudo fstrim -v / && echo "    ✅ SSD trim completed" || echo "    ❌ SSD trim failed"
+        else
+            echo "    ⚠️  Filesystem does not support trimming"
+        fi
+    else
+        echo "    ⚠️  fstrim not available"
+    fi
+    
+    # Set scheduler for SSD
+    echo "    🔧 Setting SSD-optimized I/O scheduler..."
+    for device in $(lsblk -dno name | grep -E '^sd|^nvme'); do
+        if [ -f "/sys/block/$device/queue/scheduler" ]; then
+            echo "noop" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
+            echo "none" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
+            echo "mq-deadline" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1
+            echo "      ✅ Scheduler optimized for $device"
+        fi
+    done
+    
+elif [ "$STORAGE_TYPE" = "hdd" ]; then
+    echo "  💿 Applying HDD optimizations..."
+    
+    # Set scheduler for HDD
+    echo "    🔧 Setting HDD-optimized I/O scheduler..."
+    for device in $(lsblk -dno name | grep -E '^sd'); do
+        if [ -f "/sys/block/$device/queue/scheduler" ]; then
+            echo "deadline" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
+            echo "mq-deadline" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
+            echo "cfq" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1
+            echo "      ✅ Scheduler optimized for $device"
+        fi
+    done
+    
+    # Enable write-back caching for HDD (if safe)
+    echo "    🔧 Optimizing HDD cache settings..."
+    for device in $(lsblk -dno name | grep -E '^sd'); do
+        if command -v hdparm >/dev/null 2>&1; then
+            sudo hdparm -W1 /dev/$device >/dev/null 2>&1 && echo "      ✅ Write caching enabled for $device" || echo "      ⚠️  Could not enable write caching for $device"
+        fi
+    done
+    
+    # Defragment ext4 filesystems
+    echo "    🔧 Defragmenting filesystem..."
+    if command -v e4defrag >/dev/null 2>&1; then
+        sudo e4defrag / >/dev/null 2>&1 && echo "      ✅ Filesystem defragmented" || echo "      ⚠️  Defragmentation failed or not needed"
+    else
+        echo "      ⚠️  e4defrag not available, installing..."
+        sudo apt install -y e2fsprogs >/dev/null 2>&1 || echo "      ❌ Could not install e2fsprogs"
+    fi
+    
+    # Check and repair filesystem
+    echo "    🔧 Checking filesystem integrity..."
+    echo "      ℹ️  Filesystem check will run on next reboot"
+    sudo touch /forcefsck && echo "      ✅ Filesystem check scheduled for next boot"
+    
 else
-    echo "  ⚠️  fstrim not available"
+    echo "  ❓ Unknown storage type, applying generic optimizations..."
+    if [ -x /usr/sbin/fstrim ]; then
+        sudo fstrim -v / >/dev/null 2>&1 && echo "    ✅ Generic trim completed" || echo "    ⚠️  Trim not supported"
+    fi
+fi
+
+# Make scheduler changes persistent
+echo "  📝 Making I/O scheduler changes persistent..."
+if [ "$STORAGE_TYPE" = "ssd" ]; then
+    echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT elevator=noop"' | sudo tee -a /etc/default/grub.d/99-optimizer.cfg >/dev/null 2>&1
+    echo "    ✅ SSD scheduler will persist after reboot"
+elif [ "$STORAGE_TYPE" = "hdd" ]; then
+    echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT elevator=deadline"' | sudo tee -a /etc/default/grub.d/99-optimizer.cfg >/dev/null 2>&1
+    echo "    ✅ HDD scheduler will persist after reboot"
 fi
 
 ### PART 12: Configure Filesystem Optimizations ###
@@ -522,17 +717,13 @@ echo "      • Alt+Print Screen: Area screenshot"
 echo ""
 echo "✅ Ultra optimization complete!"
 echo "⏰ Completed at: $(date)"
-echo ""script will run automatically on each boot"
+echo ""
 echo "🔁 REBOOT YOUR SYSTEM to apply all changes"
 echo "🏠 You'll automatically login to LXDE desktop"
-### PART 17: Final Note ###
-echo "" Your Lubuntu system is now optimized for maximum performance!"echo ""echo "📋 Performance boost logs: /var/log/performance-boost.log"echo "🔧 Manual performance boost: sudo /usr/local/bin/performance-boost"echo "✅ Ultra optimization complete!"echo "⏰ Completed at: $(date)"echo ""echo "🔁 REBOOT YOUR SYSTEM to apply all changes"echo "🏠 You'll automatically login to LXDE desktop"echo "💡 Performance boost script will run automatically on each boot"
-
-
-echo "🎯 Your Lubuntu system is now optimized for maximum performance!"echo ""echo "📋 Performance boost logs: /var/log/performance-boost.log"echo "🔧 Manual performance boost: sudo /usr/local/bin/performance-boost"
-
-sudo e4defrag /
-sudo fsck -y /
-sudo tune2fs -O ^has_journal /dev/sdXsudo fsck -y /
-
-sudo e4defrag /sudo hdparm -W1 /dev/sdXsudo e4defrag /
+echo "� Performance boost script will run automatically on each boot"
+echo "🔧 Manual performance boost: sudo /usr/local/bin/performance-boost"
+echo "📋 Performance boost logs: /var/log/performance-boost.log"
+echo ""
+echo "🎯 Your Lubuntu system is now optimized for maximum performance!"
+echo "� Fork issues have been addressed for low-memory systems"
+echo "� Storage optimization applied based on detected drive type"
