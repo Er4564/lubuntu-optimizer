@@ -19,6 +19,16 @@ Lubuntu Optimizer is a script designed to enhance the performance of Lubuntu, es
 - Includes fork issue fix script for low-memory systems.
 - Configures system limits and process management optimizations.
 
+<small>Version updated to v2.0.4 with more robust optimizations and features</small>
+
+## New Features in v2.0.4
+- Kills interfering apt/dpkg processes before running operations
+- Automatic low-RAM detection (<=1GB) with 2GB swap creation and sysctl/ulimit tweaks
+- Intel P-state detection and automatic GRUB configuration
+- Comprehensive HDD optimizations: scheduler, caching, defragment, noatime, swappiness, fsck, and cache cleanup
+- Service analyzer: stops/disables/masks non-essential running services
+- Fork issue fix fully integrated: swap, kernel tuning, process cleanup, summary guidance
+
 ## Installation Guide
 
 ### Option 1: Clone the Repository

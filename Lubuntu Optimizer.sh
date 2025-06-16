@@ -17,15 +17,28 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-# Check for running apt/dpkg processes and kill if interfering
-APT_PROCS=$(pgrep -x apt || pgrep -x apt-get || pgrep -x dpkg || pgrep -x unattended-upgrade || true)
+# Force kill any running apt/dpkg processes and services
+echo "🔒 Checking and stopping apt/dpkg processes and services..."
+
+# Kill any running apt/dpkg processes
+APT_PROCS=$(pgrep -f "apt|dpkg|unattended-upgrade" || true)
 if [ -n "$APT_PROCS" ]; then
     echo "⚠️  Detected running apt/dpkg processes: $APT_PROCS"
-    echo "    Attempting to kill interfering apt/dpkg processes..."
+    echo "    Killing apt/dpkg processes..."
     sudo kill -9 $APT_PROCS 2>/dev/null || true
-    sleep 2
-    echo "    ✅ Killed interfering apt/dpkg processes."
+    sleep 3
+    echo "    ✅ Killed apt/dpkg processes."
 fi
+
+# Stop and disable unattended-upgrades service
+sudo systemctl stop unattended-upgrades 2>/dev/null || true
+sudo systemctl disable unattended-upgrades 2>/dev/null || true
+
+# Remove apt locks if they exist
+sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true
+sudo dpkg --configure -a 2>/dev/null || true
+
+echo "    ✅ APT system cleared and ready."
 
 # Low RAM fix: If system has 1GB RAM or less, create 2GB swap and apply extra tweaks
 TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
@@ -90,7 +103,13 @@ HEAVY_PACKAGES=(
     gnome-games*
 )
 
-echo "${HEAVY_PACKAGES[@]}" | xargs -n1 -P4 sudo apt purge -y
+# Remove packages safely with error handling
+for pkg in "${HEAVY_PACKAGES[@]}"; do
+    if dpkg -l | grep -q "^ii.*$pkg" 2>/dev/null; then
+        echo "    🗑️  Removing $pkg..."
+        sudo apt purge -y "$pkg" 2>/dev/null || echo "    ⚠️  Could not remove $pkg"
+    fi
+done
 
 echo "  🧹 Running autoremove and clean..."
 sudo apt autoremove -y && echo "    ✅ Autoremove completed" || echo "    ❌ Autoremove failed"
