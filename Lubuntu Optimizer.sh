@@ -215,6 +215,16 @@ else
     echo "⚠️ cpufreq-set not available"
 fi
 
+# Intel P-state configuration
+if [ -d /sys/devices/system/cpu/intel_pstate ]; then
+    echo "Intel P-state is supported. Enabling in GRUB..."
+    sudo sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="/GRUB_CMDLINE_LINUX_DEFAULT="intel_pstate=enable /' /etc/default/grub
+    sudo update-grub
+    echo "Intel P-state will be enabled after reboot."
+else
+    echo "Intel P-state not supported on this CPU. Using acpi-cpufreq."
+fi
+
 ### PART 6: Disable Unused Services ###
 echo "🚫 Disabling unnecessary services..."
 SERVICES=(
@@ -350,17 +360,46 @@ else
     fi
 fi
 
-# Optimize system limits and memory management for fork issues
-echo "  🔧 Optimizing system limits and memory management..."
+# --- Fork Issue Fix Integration ---
+echo "🔧 Fork Issue Fix: Ensuring swap, ulimits, kernel params, and process cleanup..."
 
-# Set higher ulimit for current session
-ulimit -u 4096 2>/dev/null || echo "    ⚠️  Could not set ulimit -u"
-ulimit -n 1024 2>/dev/null || echo "    ⚠️  Could not set ulimit -n"
-echo "    ✅ ulimit values updated for current session"
+# 1. Check current memory
+echo -e "\n[INFO] Current memory status:"
+free -h
 
-# Optimize kernel parameters for low memory systems and fork issues
-echo "  ⚙️  Applying kernel optimizations for low-memory systems..."
-sudo tee /etc/sysctl.d/99-fork-fix.conf > /dev/null << 'EOF'
+# 2. Add/configure swap file if not already present
+SWAPFILE="/swapfile"
+SWAP_SIZE=${SWAP_SIZE:-2G}
+if swapon --show | grep -q "$SWAPFILE"; then
+    echo "[OK] Swap file already exists."
+else
+    echo "[ACTION] Creating ${SWAP_SIZE} swap file..."
+    FREE_SPACE=$(df --output=avail / | tail -1)
+    REQUIRED_SPACE=$((2 * 1024 * 1024)) # 2GB in KB
+    if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
+        echo "❌ Not enough disk space to create swap file. Free space: $(df -h / | tail -1 | awk '{print $4}')"
+        exit 1
+    fi
+    (sudo fallocate -l "$SWAP_SIZE" "$SWAPFILE" || sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=2048) && echo "✅ Swap file created" || {
+        echo "❌ Failed to create swap file"; exit 1;
+    }
+    sudo chmod 600 "$SWAPFILE" && echo "✅ Swap file permissions set"
+    sudo mkswap "$SWAPFILE" && echo "✅ Swap file formatted"
+    sudo swapon "$SWAPFILE" && echo "✅ Swap file activated"
+    if ! grep -q "$SWAPFILE" /etc/fstab; then
+        echo "[INFO] Making swap permanent..."
+        echo "$SWAPFILE none swap sw 0 0" | sudo tee -a /etc/fstab
+    fi
+fi
+
+# 3. Optimize system limits and memory management
+echo -e "\n[INFO] Optimizing system limits and memory management..."
+ulimit -u 4096
+ulimit -n 1024
+echo "[OK] ulimit values updated for current session."
+
+# Kernel parameters for fork/memory issues
+cat > /tmp/fork_fix_sysctl.conf << 'EOF'
 # Memory management optimizations
 vm.swappiness=10
 vm.vfs_cache_pressure=50
@@ -368,30 +407,17 @@ vm.dirty_ratio=3
 vm.dirty_background_ratio=1
 vm.overcommit_memory=1
 vm.overcommit_ratio=50
-
 # Process and fork optimizations
 kernel.pid_max=65536
 kernel.threads-max=16384
-
-# Additional performance optimizations
-vm.dirty_writeback_centisecs=1500
-vm.dirty_expire_centisecs=3000
-kernel.sched_min_granularity_ns=10000000
-kernel.sched_wakeup_granularity_ns=15000000
-net.core.netdev_max_backlog=5000
-
-# Disable IPv6 if not needed
-net.ipv6.conf.all.disable_ipv6 = 1
-net.ipv6.conf.default.disable_ipv6 = 1
-net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
-
-sudo sysctl -p /etc/sysctl.d/99-fork-fix.conf && echo "    ✅ Kernel parameters applied"
+sudo cp /tmp/fork_fix_sysctl.conf /etc/sysctl.d/99-fork-fix.conf
+sudo sysctl -p /etc/sysctl.d/99-fork-fix.conf && echo "✅ Kernel parameters applied"
 
 # Make ulimit changes permanent
-echo "  📝 Making ulimit changes permanent..."
+echo "[ACTION] Making ulimit changes permanent..."
 if ! grep -q "lubuntu-optimizer fork fix" /etc/security/limits.conf; then
-    sudo tee -a /etc/security/limits.conf > /dev/null << 'EOF'
+    cat >> /etc/security/limits.conf << 'EOF'
 
 # lubuntu-optimizer fork fix
 * soft nproc 4096
@@ -401,32 +427,43 @@ if ! grep -q "lubuntu-optimizer fork fix" /etc/security/limits.conf; then
 root soft nproc unlimited
 root hard nproc unlimited
 EOF
-    echo "    ✅ Permanent limits configured"
+    echo "✅ Permanent limits configured"
 fi
 
-# Clean up zombie processes
-echo "  🧹 Cleaning up zombie processes..."
+# 4. Clean up processes and optimize performance
+echo -e "\n[INFO] Cleaning up system processes..."
+# Kill zombie processes
+echo "[INFO] Searching for zombie processes..."
 ZOMBIES=$(ps -e -o stat,pid | awk '$1 ~ /^Z/ { print $2 }')
-
 if [[ -z "$ZOMBIES" ]]; then
-    echo "    ✅ No zombie processes found"
+    echo "[OK] No zombie processes found."
 else
-    echo "    🔄 Found zombie processes: $ZOMBIES"
-    echo "    📝 Attempting to clean them (will signal parents)..."
+    echo "[ACTION] Found zombie processes: $ZOMBIES"
+    echo "[INFO] Attempting to clean them (will signal parents)..."
     for pid in $ZOMBIES; do
         ppid=$(ps -o ppid= -p $pid 2>/dev/null || echo "")
         if [[ -n "$ppid" && "$ppid" != "0" ]]; then
-            echo "    📡 Sending SIGCHLD to parent process $ppid"
-            sudo kill -CHLD $ppid 2>/dev/null || echo "    ⚠️  Could not signal parent $ppid"
+            echo "[INFO] Sending SIGCHLD to parent process $ppid"
+            sudo kill -CHLD $ppid 2>/dev/null || echo "[WARN] Could not signal parent $ppid"
         fi
     done
 fi
-
 # Clean up system cache
-echo "  🗑️  Cleaning system cache..."
+echo "[ACTION] Cleaning system cache..."
 sync
 echo 1 | sudo tee /proc/sys/vm/drop_caches >/dev/null 2>&1
-echo "    ✅ System cache cleared"
+echo "[OK] System cache cleared."
+
+# 5. Summary
+echo -e "\n[SUMMARY]"
+free -h
+swapon --show
+ulimit -a | grep 'max user processes'
+echo -e "\n[NOTE] To make higher ulimit permanent, edit these files:"
+echo "- /etc/security/limits.conf"
+echo "- /etc/systemd/user.conf or /etc/systemd/system.conf (DefaultTasksMax=infinity)"
+echo "- And make sure pam_limits.so is included in /etc/pam.d/common-session"
+echo -e "\n✅ Done. You may need to reboot for all changes to take full effect."
 
 ### PART 9: Enable ZRAM ###
 echo "🧊 Setting up ZRAM..."
