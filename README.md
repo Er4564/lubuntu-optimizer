@@ -17,9 +17,33 @@ Lubuntu Optimizer is a script designed to enhance the performance of Lubuntu, es
 - Cleans up system cache and unnecessary files.
 
 ## Installation Guide
-1. Download the script:
+
+### Option 1: Clone the Repository
+1. Clone the repository:
    ```bash
-   wget -O Lubuntu-Optimizer.sh https://example.com/path/to/Lubuntu%20Optimizer.sh
+   git clone https://github.com/Er4564/lubuntu-optimizer.git
+   cd lubuntu-optimizer
+   ```
+
+2. Make the script executable:
+   ```bash
+   chmod +x Lubuntu\ Optimizer.sh
+   ```
+
+3. Run the script:
+   ```bash
+   sudo ./Lubuntu\ Optimizer.sh
+   ```
+
+4. Reboot your system to apply all changes:
+   ```bash
+   sudo reboot
+   ```
+
+### Option 2: Download with `wget`
+1. Download the script directly using `wget`:
+   ```bash
+   wget -O Lubuntu-Optimizer.sh https://raw.githubusercontent.com/Er4564/lubuntu-optimizer/main/Lubuntu%20Optimizer.sh
    ```
 
 2. Make the script executable:
