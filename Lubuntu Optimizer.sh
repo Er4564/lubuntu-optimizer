@@ -1,4 +1,6 @@
 #!/bin/bash
+SCRIPT_VERSION="1.0.0"
+echo "🚀 Lubuntu Optimizer v$SCRIPT_VERSION"
 echo "🚀 Starting FINAL ultra optimization for Lubuntu..."
 echo "ℹ️  This script will keep LXDE and set up auto-login"
 echo "⏰ Started at: $(date)"
@@ -35,14 +37,7 @@ HEAVY_PACKAGES=(
     gnome-games*
 )
 
-for pkg in "${HEAVY_PACKAGES[@]}"; do
-    if dpkg -l | grep -q "^ii.*$pkg"; then
-        echo "    🗑️  Removing $pkg..."
-        sudo apt purge -y "$pkg" 2>/dev/null && echo "      ✅ Removed $pkg" || echo "      ⚠️  Failed to remove $pkg"
-    else
-        echo "    ⚠️  Package $pkg not installed"
-    fi
-done
+echo "${HEAVY_PACKAGES[@]}" | xargs -n1 -P4 sudo apt purge -y
 
 echo "  🧹 Running autoremove and clean..."
 sudo apt autoremove -y && echo "    ✅ Autoremove completed" || echo "    ❌ Autoremove failed"
@@ -68,9 +63,15 @@ for pkg in "${LIGHT_PACKAGES[@]}"; do
     if [ "$pkg" = "chromium-browser" ]; then
         sudo apt install -y "$pkg" --no-install-recommends && echo "    ✅ Installed $pkg" || echo "    ❌ Failed to install $pkg"
     else
-        sudo apt install -y "$pkg" && echo "    ✅ Installed $pkg" || echo "    ❌ Failed to install $pkg"
+        if ! dpkg -l | grep -q "$pkg"; then
+            sudo apt install -y "$pkg" && echo "✅ Installed $pkg" || echo "❌ Failed to install $pkg"
+        else
+            echo "⚠️ $pkg is already installed"
+        fi
     fi
 done
+
+sudo apt-mark manual "${LIGHT_PACKAGES[@]}"
 
 ### PART 3: Configure Auto-Login for LXDE ###
 echo "🔐 Setting up auto-login for LXDE..."
@@ -108,7 +109,11 @@ echo 'GOVERNOR="performance"' | sudo tee /etc/default/cpufrequtils > /dev/null
 echo "  📝 Set default governor to performance in /etc/default/cpufrequtils"
 
 # Apply immediately
-sudo cpufreq-set -g performance 2>/dev/null && echo "  ✅ CPU governor set to performance" || echo "  ⚠️  Unable to set governor immediately (will apply on reboot)"
+if command -v cpufreq-set >/dev/null; then
+    sudo cpufreq-set -g performance && echo "✅ CPU governor set to performance" || echo "❌ Failed to set CPU governor"
+else
+    echo "⚠️ cpufreq-set not available"
+fi
 
 ### PART 6: Disable Unused Services ###
 echo "🚫 Disabling unnecessary services..."
@@ -154,7 +159,8 @@ if free | awk '/^Swap:/ {exit !$2}'; then
     echo "  ✅ Swap already exists: $(free -h | grep Swap | awk '{print $2}')"
 else
     echo "  📝 Creating 1GB swap file..."
-    sudo fallocate -l 1G /swapfile && echo "    ✅ Swap file allocated" || echo "    ❌ Swap file allocation failed"
+    SWAP_SIZE=${SWAP_SIZE:-1G}
+sudo fallocate -l "$SWAP_SIZE" /swapfile
     sudo chmod 600 /swapfile && echo "    ✅ Swap file permissions set" || echo "    ❌ Swap file permissions failed"
     sudo mkswap /swapfile && echo "    ✅ Swap file formatted" || echo "    ❌ Swap file format failed"
     sudo swapon /swapfile && echo "    ✅ Swap file activated" || echo "    ❌ Swap file activation failed"
@@ -172,6 +178,8 @@ fi
 ### PART 10: Optimize Boot Process ###
 echo "🚀 Optimizing boot process..."
 echo "  ⏱️  Current GRUB timeout: $(grep GRUB_TIMEOUT= /etc/default/grub | cut -d= -f2)"
+GRUB_TIMEOUT=${GRUB_TIMEOUT:-1}
+sudo sed -i "s/GRUB_TIMEOUT=.*/GRUB_TIMEOUT=$GRUB_TIMEOUT/" /etc/default/grub
 sudo sed -i 's/GRUB_TIMEOUT=10/GRUB_TIMEOUT=1/' /etc/default/grub && echo "    ✅ GRUB timeout set to 1 second" || echo "    ❌ GRUB timeout change failed"
 sudo sed -i 's/GRUB_TIMEOUT=5/GRUB_TIMEOUT=1/' /etc/default/grub 2>/dev/null # Alternative timeout value
 
@@ -188,7 +196,11 @@ echo 'blacklist snd_pcsp' | sudo tee -a /etc/modprobe.d/blacklist.conf && echo "
 ### PART 11: Trim Disk (For SSD or Flash) ###
 echo "💾 Running disk trim..."
 if [ -x /usr/sbin/fstrim ]; then
-    sudo fstrim -v / && echo "  ✅ Disk trim completed" || echo "  ❌ Disk trim failed"
+    if [ "$(findmnt -n -o FSTYPE /)" = "ext4" ] || [ "$(findmnt -n -o FSTYPE /)" = "btrfs" ]; then
+        sudo fstrim -v / && echo "✅ Disk trim completed" || echo "❌ Disk trim failed"
+    else
+        echo "⚠️ Filesystem does not support trimming"
+    fi
 else
     echo "  ⚠️  fstrim not available"
 fi
@@ -287,16 +299,180 @@ echo "  🔄 Services disabled: ${#SERVICES[@]}"
 echo "  📦 Heavy packages removed"
 echo "  ⚡ CPU governor: performance (will apply on reboot)"
 echo "  🔐 Auto-login configured for: $CURRENT_USER"
+echo "  ⌨️  Configuring LXDE keyboard shortcuts..."
 
+# Create LXDE keybindings configuration directory if it doesn't exist
+mkdir -p ~/.config/openbox
+
+# Backup existing keyboard shortcuts if present
+if [ -f ~/.config/openbox/lxde-rc.xml ]; then
+    cp ~/.config/openbox/lxde-rc.xml ~/.config/openbox/lxde-rc.xml.backup
+    echo "✅ Backed up existing keyboard shortcuts"
+fi
+
+# Create or update LXDE keyboard shortcuts
+cat > ~/.config/openbox/lxde-rc.xml << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc" xmlns:xi="http://www.w3.org/2001/XInclude">
+    <keyboard>
+        <!-- Terminal shortcuts -->
+        <keybind key="C-A-t">
+            <action name="Execute">
+                <command>lxterminal</command>
+            </action>
+        </keybind>
+        <keybind key="C-t">
+            <action name="Execute">
+                <command>lxterminal</command>
+            </action>
+        </keybind>
+        
+        <!-- File manager shortcuts -->
+        <keybind key="C-A-f">
+            <action name="Execute">
+                <command>pcmanfm</command>
+            </action>
+        </keybind>
+        <keybind key="W-e">
+            <action name="Execute">
+                <command>pcmanfm</command>
+            </action>
+        </keybind>
+        
+        <!-- Browser shortcuts -->
+        <keybind key="C-A-b">
+            <action name="Execute">
+                <command>chromium-browser</command>
+            </action>
+        </keybind>
+        <keybind key="W-b">
+            <action name="Execute">
+                <command>dillo</command>
+            </action>
+        </keybind>
+        
+        <!-- System monitor -->
+        <keybind key="C-S-Escape">
+            <action name="Execute">
+                <command>lxtask</command>
+            </action>
+        </keybind>
+        
+        <!-- Screen lock -->
+        <keybind key="W-l">
+            <action name="Execute">
+                <command>xscreensaver-command -lock</command>
+            </action>
+        </keybind>
+        
+        <!-- Application launcher -->
+        <keybind key="A-F2">
+            <action name="Execute">
+                <command>lxpanelctl run</command>
+            </action>
+        </keybind>
+        <keybind key="W-r">
+            <action name="Execute">
+                <command>lxpanelctl run</command>
+            </action>
+        </keybind>
+        
+        <!-- Window management -->
+        <keybind key="A-F4">
+            <action name="Close"/>
+        </keybind>
+        <keybind key="A-Tab">
+            <action name="NextWindow"/>
+        </keybind>
+        <keybind key="W-Up">
+            <action name="Maximize"/>
+        </keybind>
+        <keybind key="W-Down">
+            <action name="Unmaximize"/>
+        </keybind>
+        <keybind key="W-Left">
+            <action name="UnmaximizeFull"/>
+            <action name="MoveResizeTo">
+                <x>0</x>
+                <y>0</y>
+                <width>50%</width>
+                <height>100%</height>
+            </action>
+        </keybind>
+        <keybind key="W-Right">
+            <action name="UnmaximizeFull"/>
+            <action name="MoveResizeTo">
+                <x>-0</x>
+                <y>0</y>
+                <width>50%</width>
+                <height>100%</height>
+            </action>
+        </keybind>
+        
+        <!-- Volume control -->
+        <keybind key="XF86AudioRaiseVolume">
+            <action name="Execute">
+                <command>amixer set Master 5%+</command>
+            </action>
+        </keybind>
+        <keybind key="XF86AudioLowerVolume">
+            <action name="Execute">
+                <command>amixer set Master 5%-</command>
+            </action>
+        </keybind>
+        <keybind key="XF86AudioMute">
+            <action name="Execute">
+                <command>amixer set Master toggle</command>
+            </action>
+        </keybind>
+        
+        <!-- Screenshot -->
+        <keybind key="Print">
+            <action name="Execute">
+                <command>scrot ~/Desktop/screenshot_%Y%m%d_%H%M%S.png</command>
+            </action>
+        </keybind>
+        <keybind key="A-Print">
+            <action name="Execute">
+                <command>scrot -s ~/Desktop/screenshot_%Y%m%d_%H%M%S.png</command>
+            </action>
+        </keybind>
+    </keyboard>
+</openbox_config>
+EOF
+
+echo "    ✅ LXDE keyboard shortcuts configured"
+
+# Install scrot for screenshots if not present
+if ! command -v scrot >/dev/null; then
+    echo "❌ scrot is not installed. Installing..."
+    sudo apt install -y scrot
+fi
+
+# Restart openbox to apply changes (will happen on next login/reboot)
+echo "    📝 Keyboard shortcuts will be active after reboot"
+echo "    ⌨️  Available shortcuts:"
+echo "      • Ctrl+T or Ctrl+Alt+T: Open Terminal"
+echo "      • Ctrl+Alt+F or Win+E: Open File Manager" 
+echo "      • Ctrl+Alt+B: Open Chromium Browser"
+echo "      • Win+B: Open Dillo (lightweight browser)"
+echo "      • Ctrl+Shift+Esc: Open Task Manager"
+echo "      • Win+L: Lock Screen"
+echo "      • Alt+F2 or Win+R: Run Command"
+echo "      • Alt+F4: Close Window"
+echo "      • Alt+Tab: Switch Windows"
+echo "      • Win+Arrow Keys: Window snapping/maximize"
+echo "      • Print Screen: Full screenshot"
+echo "      • Alt+Print Screen: Area screenshot"
 ### PART 17: Final Note ###
 echo ""
 echo "✅ Ultra optimization complete!"
 echo "⏰ Completed at: $(date)"
-echo ""
+echo ""script will run automatically on each boot"
 echo "🔁 REBOOT YOUR SYSTEM to apply all changes"
 echo "🏠 You'll automatically login to LXDE desktop"
-echo "💡 Performance boost script will run automatically on each boot"
-echo "🔧 Manual performance boost: sudo /usr/local/bin/performance-boost"
-echo "📋 Performance boost logs: /var/log/performance-boost.log"
-echo ""
-echo "🎯 Your Lubuntu system is now optimized for maximum performance!"
+### PART 17: Final Note ###
+echo "" Your Lubuntu system is now optimized for maximum performance!"echo ""echo "📋 Performance boost logs: /var/log/performance-boost.log"echo "🔧 Manual performance boost: sudo /usr/local/bin/performance-boost"echo "✅ Ultra optimization complete!"echo "⏰ Completed at: $(date)"echo ""echo "🔁 REBOOT YOUR SYSTEM to apply all changes"echo "🏠 You'll automatically login to LXDE desktop"echo "💡 Performance boost script will run automatically on each boot"
+
+
+echo "🎯 Your Lubuntu system is now optimized for maximum performance!"echo ""echo "📋 Performance boost logs: /var/log/performance-boost.log"echo "🔧 Manual performance boost: sudo /usr/local/bin/performance-boost"
