@@ -494,20 +494,18 @@ echo 'blacklist snd_pcsp' | sudo tee -a /etc/modprobe.d/blacklist.conf && echo "
 ### PART 11: HDD Optimization and Disk Trim ###
 echo "💾 Running HDD disk optimization..."
 
-# Apply HDD optimizations
-echo "  💿 Applying HDD optimizations..."
-echo "    🔧 Setting HDD-optimized I/O scheduler..."
+# Set I/O scheduler to deadline (or cfq as fallback) and make persistent
 for device in $(lsblk -dno name | grep -E '^sd'); do
     if [ -f "/sys/block/$device/queue/scheduler" ]; then
-        echo "deadline" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
-        echo "mq-deadline" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
-        echo "cfq" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1
+        echo deadline | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
+        echo cfq | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1
         echo "      ✅ Scheduler optimized for $device"
     fi
 done
+echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT elevator=deadline"' | sudo tee -a /etc/default/grub.d/99-optimizer.cfg >/dev/null 2>&1
+sudo update-grub
 
 # Enable write-back caching for HDD (if safe)
-echo "    🔧 Optimizing HDD cache settings..."
 for device in $(lsblk -dno name | grep -E '^sd'); do
     if command -v hdparm >/dev/null 2>&1; then
         sudo hdparm -W1 /dev/$device >/dev/null 2>&1 && echo "      ✅ Write caching enabled for $device" || echo "      ⚠️  Could not enable write caching for $device"
@@ -515,7 +513,6 @@ for device in $(lsblk -dno name | grep -E '^sd'); do
 done
 
 # Defragment ext4 filesystems
-echo "    🔧 Defragmenting filesystem..."
 if command -v e4defrag >/dev/null 2>&1; then
     sudo e4defrag / >/dev/null 2>&1 && echo "      ✅ Filesystem defragmented" || echo "      ⚠️  Defragmentation failed or not needed"
 else
@@ -523,15 +520,18 @@ else
     sudo apt install -y e2fsprogs >/dev/null 2>&1 || echo "      ❌ Could not install e2fsprogs"
 fi
 
-# Check and repair filesystem
-echo "    🔧 Checking filesystem integrity..."
-echo "      ℹ️  Filesystem check will run on next reboot"
-sudo touch /forcefsck && echo "      ✅ Filesystem check scheduled for next boot"
+# Add noatime to /etc/fstab
+sudo sed -i 's/errors=remount-ro/noatime,errors=remount-ro/' /etc/fstab
 
-# Make scheduler changes persistent
-echo "  📝 Making I/O scheduler changes persistent..."
-echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT elevator=deadline"' | sudo tee -a /etc/default/grub.d/99-optimizer.cfg >/dev/null 2>&1
-echo "    ✅ HDD scheduler will persist after reboot"
+# Set swappiness to 10
+sudo tee /etc/sysctl.d/99-swappiness.conf <<< 'vm.swappiness=10'
+sudo sysctl -p /etc/sysctl.d/99-swappiness.conf
+
+# Schedule filesystem check
+sudo touch /forcefsck
+
+# Clean up old logs and cache
+sudo rm -rf /var/log/*.gz /var/log/*.1 /var/cache/apt/archives/*.deb /tmp/* ~/.cache/* 2>/dev/null
 
 ### PART 12: Configure Filesystem Optimizations ###
 echo "🗂 Applying filesystem optimizations..."
