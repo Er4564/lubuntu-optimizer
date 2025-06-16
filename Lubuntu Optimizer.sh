@@ -17,6 +17,47 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Check for running apt/dpkg processes and kill if interfering
+APT_PROCS=$(pgrep -x apt || pgrep -x apt-get || pgrep -x dpkg || pgrep -x unattended-upgrade || true)
+if [ -n "$APT_PROCS" ]; then
+    echo "⚠️  Detected running apt/dpkg processes: $APT_PROCS"
+    echo "    Attempting to kill interfering apt/dpkg processes..."
+    sudo kill -9 $APT_PROCS 2>/dev/null || true
+    sleep 2
+    echo "    ✅ Killed interfering apt/dpkg processes."
+fi
+
+# Low RAM fix: If system has 1GB RAM or less, create 2GB swap and apply extra tweaks
+TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+if [ "$TOTAL_MEM_KB" -le 1048576 ]; then
+    echo "⚠️  Low RAM detected (<=1GB). Applying extra low-memory optimizations..."
+    SWAPFILE="/swapfile"
+    SWAP_SIZE="2G"
+    if ! swapon --show | grep -q "$SWAPFILE"; then
+        echo "    📝 Creating 2GB swap file for low RAM..."
+        sudo fallocate -l $SWAP_SIZE $SWAPFILE || sudo dd if=/dev/zero of=$SWAPFILE bs=1M count=2048
+        sudo chmod 600 $SWAPFILE
+        sudo mkswap $SWAPFILE
+        sudo swapon $SWAPFILE
+        if ! grep -q "$SWAPFILE" /etc/fstab; then
+            echo "$SWAPFILE none swap sw 0 0" | sudo tee -a /etc/fstab
+        fi
+        echo "    ✅ 2GB swap file created and enabled."
+    else
+        echo "    ✅ Swap file already exists."
+    fi
+    # Extra sysctl and ulimit tweaks for low RAM
+    sudo tee /etc/sysctl.d/99-lowram.conf > /dev/null << 'EOF'
+vm.swappiness=20
+vm.overcommit_memory=1
+vm.overcommit_ratio=50
+EOF
+    sudo sysctl -p /etc/sysctl.d/99-lowram.conf
+    ulimit -u 4096
+    ulimit -n 1024
+    echo "    ✅ Low RAM sysctl and ulimit tweaks applied."
+fi
+
 ### PART 0: System Information ###
 echo "🔍 System Information:"
 echo "  OS: $(lsb_release -d | cut -f2)"
@@ -650,7 +691,11 @@ echo "    ✅ LXDE keyboard shortcuts configured"
 # Install scrot for screenshots if not present
 if ! command -v scrot >/dev/null; then
     echo "❌ scrot is not installed. Installing..."
-    sudo apt install -y scrot
+    if sudo apt install -y scrot; then
+        echo "✅ scrot installed successfully"
+    else
+        echo "⚠️  Failed to install scrot, but continuing script"
+    fi
 fi
 
 # Restart openbox to apply changes (will happen on next login/reboot)
