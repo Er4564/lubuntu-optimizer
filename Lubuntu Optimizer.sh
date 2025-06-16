@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPT_VERSION="1.0.0"
+SCRIPT_VERSION="1.0.1"
 echo "🚀 Lubuntu Optimizer v$SCRIPT_VERSION"
 echo "🚀 Starting FINAL ultra optimization for Lubuntu..."
 echo "ℹ️  This script will keep LXDE and set up auto-login"
@@ -102,18 +102,9 @@ echo "⚡ Setting CPU governor to performance..."
 echo "  Current CPU governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo 'Unable to read')"
 
 # Install cpufrequtils for persistent governor setting
-sudo apt install -y cpufrequtils && echo "  ✅ cpufrequtils installed" || echo "  ❌ cpufrequtils installation failed"
-
-# Set governor to performance
-echo 'GOVERNOR="performance"' | sudo tee /etc/default/cpufrequtils > /dev/null
-echo "  📝 Set default governor to performance in /etc/default/cpufrequtils"
-
-# Apply immediately
-if command -v cpufreq-set >/dev/null; then
-    sudo cpufreq-set -g performance && echo "✅ CPU governor set to performance" || echo "❌ Failed to set CPU governor"
-else
-    echo "⚠️ cpufreq-set not available"
-fi
+sudo apt install -y cpufrequtils
+echo 'GOVERNOR="performance"' | sudo tee /etc/default/cpufrequtils
+sudo cpufreq-set -g performance
 
 ### PART 6: Disable Unused Services ###
 echo "🚫 Disabling unnecessary services..."
@@ -148,7 +139,7 @@ done
 echo "🔧 Setting up lightweight alternatives..."
 echo "  🐚 Configuring dash as default shell..."
 echo "dash dash/sh boolean true" | sudo debconf-set-selections
-sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure dash && echo "    ✅ Dash configured" || echo "    ⚠️  Dash configuration failed"
+sudo dpkg-reconfigure dash && echo "    ✅ Dash configured" || echo "    ⚠️  Dash configuration failed"
 
 echo "  🌐 Setting lightweight default browser..."
 sudo update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/chromium-browser 50 && echo "    ✅ Chromium set as default browser" || echo "    ⚠️  Browser alternative failed"
@@ -221,7 +212,8 @@ echo "  📋 Backing up /etc/fstab..."
 sudo cp /etc/fstab /etc/fstab.backup && echo "    ✅ fstab backed up" || echo "    ❌ fstab backup failed"
 
 echo "  ⚡ Adding noatime option for better performance..."
-sudo sed -i 's/errors=remount-ro/noatime,errors=remount-ro/' /etc/fstab && echo "    ✅ noatime option added" || echo "    ❌ noatime option failed"
+sudo sed -i 's/errors=remount-ro/noatime,errors=remount-ro/' /etc/fstab
+echo "    ✅ noatime option added" || echo "    ❌ noatime option failed"
 
 ### PART 13: System Cleanup and Cache Removal ###
 echo "🧹 Cleaning up system..."
@@ -243,10 +235,11 @@ sudo rm -rf /usr/share/doc/* /usr/share/man/* /usr/share/info/* 2>/dev/null && e
 ### PART 14: Kernel Performance Tuning ###
 echo "⚙️  Applying kernel performance tweaks..."
 echo "  💾 Setting vm.swappiness to 10..."
-echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swappiness.conf && echo "    ✅ Swappiness configured" || echo "    ❌ Swappiness configuration failed"
-
+echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swappiness.conf
+sudo sysctl -p /etc/sysctl.d/99-swappiness.conf
 echo "  📝 Configuring dirty page writeback..."
-echo 'vm.dirty_writeback_centisecs=1500' | sudo tee /etc/sysctl.d/99-dirty.conf && echo "    ✅ Dirty writeback configured" || echo "    ❌ Dirty writeback failed"
+echo 'vm.dirty_writeback_centisecs=1500' | sudo tee /etc/sysctl.d/99-dirty.conf
+sudo sysctl -p /etc/sysctl.d/99-dirty.conf
 echo 'vm.dirty_ratio=5' | sudo tee -a /etc/sysctl.d/99-dirty.conf
 echo 'vm.dirty_background_ratio=2' | sudo tee -a /etc/sysctl.d/99-dirty.conf
 echo 'vm.vfs_cache_pressure=50' | sudo tee -a /etc/sysctl.d/99-dirty.conf
@@ -486,3 +479,9 @@ echo "" Your Lubuntu system is now optimized for maximum performance!"echo ""ech
 
 
 echo "🎯 Your Lubuntu system is now optimized for maximum performance!"echo ""echo "📋 Performance boost logs: /var/log/performance-boost.log"echo "🔧 Manual performance boost: sudo /usr/local/bin/performance-boost"
+
+sudo e4defrag /
+sudo fsck -y /
+sudo tune2fs -O ^has_journal /dev/sdXsudo fsck -y /
+
+sudo e4defrag /sudo hdparm -W1 /dev/sdXsudo e4defrag /
