@@ -68,6 +68,11 @@ LIGHT_PACKAGES=(
     alsa-utils
     alsa-base
     chromium-browser
+    mc
+    geany
+    mupdf
+    feh
+    preload
 )
 
 for pkg in "${LIGHT_PACKAGES[@]}"; do
@@ -186,6 +191,7 @@ SERVICES=(
     plymouth
     ufw
     apport
+    brltty
 )
 
 for svc in "${SERVICES[@]}"; do
@@ -284,6 +290,11 @@ vm.dirty_expire_centisecs=3000
 kernel.sched_min_granularity_ns=10000000
 kernel.sched_wakeup_granularity_ns=15000000
 net.core.netdev_max_backlog=5000
+
+# Disable IPv6 if not needed
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.default.disable_ipv6 = 1
+net.ipv6.conf.lo.disable_ipv6 = 1
 EOF
 
 sudo sysctl -p /etc/sysctl.d/99-fork-fix.conf && echo "    ✅ Kernel parameters applied"
@@ -355,102 +366,46 @@ echo 'blacklist pcspkr' | sudo tee -a /etc/modprobe.d/blacklist.conf && echo "  
 echo 'blacklist snd_pcsp' | sudo tee -a /etc/modprobe.d/blacklist.conf && echo "    ✅ PC speaker sound blacklisted" || echo "    ❌ PC speaker sound blacklist failed"
 
 ### PART 11: HDD Optimization and Disk Trim ###
-echo "💾 Running disk optimization..."
+echo "💾 Running HDD disk optimization..."
 
-# Detect if system has SSD or HDD
-echo "  🔍 Detecting storage device type..."
-STORAGE_TYPE="unknown"
-for device in $(lsblk -dno name | grep -E '^sd|^nvme'); do
-    if [ -f "/sys/block/$device/queue/rotational" ]; then
-        ROTATIONAL=$(cat /sys/block/$device/queue/rotational)
-        if [ "$ROTATIONAL" -eq 0 ]; then
-            STORAGE_TYPE="ssd"
-            echo "    � SSD detected: $device"
-            break
-        else
-            STORAGE_TYPE="hdd"
-            echo "    💿 HDD detected: $device"
-        fi
+# Apply HDD optimizations
+echo "  💿 Applying HDD optimizations..."
+echo "    🔧 Setting HDD-optimized I/O scheduler..."
+for device in $(lsblk -dno name | grep -E '^sd'); do
+    if [ -f "/sys/block/$device/queue/scheduler" ]; then
+        echo "deadline" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
+        echo "mq-deadline" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
+        echo "cfq" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1
+        echo "      ✅ Scheduler optimized for $device"
     fi
 done
 
-# Optimize based on storage type
-if [ "$STORAGE_TYPE" = "ssd" ]; then
-    echo "  ⚡ Applying SSD optimizations..."
-    # Trim SSD
-    if [ -x /usr/sbin/fstrim ]; then
-        if [ "$(findmnt -n -o FSTYPE /)" = "ext4" ] || [ "$(findmnt -n -o FSTYPE /)" = "btrfs" ]; then
-            sudo fstrim -v / && echo "    ✅ SSD trim completed" || echo "    ❌ SSD trim failed"
-        else
-            echo "    ⚠️  Filesystem does not support trimming"
-        fi
-    else
-        echo "    ⚠️  fstrim not available"
+# Enable write-back caching for HDD (if safe)
+echo "    🔧 Optimizing HDD cache settings..."
+for device in $(lsblk -dno name | grep -E '^sd'); do
+    if command -v hdparm >/dev/null 2>&1; then
+        sudo hdparm -W1 /dev/$device >/dev/null 2>&1 && echo "      ✅ Write caching enabled for $device" || echo "      ⚠️  Could not enable write caching for $device"
     fi
-    
-    # Set scheduler for SSD
-    echo "    🔧 Setting SSD-optimized I/O scheduler..."
-    for device in $(lsblk -dno name | grep -E '^sd|^nvme'); do
-        if [ -f "/sys/block/$device/queue/scheduler" ]; then
-            echo "noop" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
-            echo "none" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
-            echo "mq-deadline" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1
-            echo "      ✅ Scheduler optimized for $device"
-        fi
-    done
-    
-elif [ "$STORAGE_TYPE" = "hdd" ]; then
-    echo "  💿 Applying HDD optimizations..."
-    
-    # Set scheduler for HDD
-    echo "    🔧 Setting HDD-optimized I/O scheduler..."
-    for device in $(lsblk -dno name | grep -E '^sd'); do
-        if [ -f "/sys/block/$device/queue/scheduler" ]; then
-            echo "deadline" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
-            echo "mq-deadline" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1 || \
-            echo "cfq" | sudo tee /sys/block/$device/queue/scheduler >/dev/null 2>&1
-            echo "      ✅ Scheduler optimized for $device"
-        fi
-    done
-    
-    # Enable write-back caching for HDD (if safe)
-    echo "    🔧 Optimizing HDD cache settings..."
-    for device in $(lsblk -dno name | grep -E '^sd'); do
-        if command -v hdparm >/dev/null 2>&1; then
-            sudo hdparm -W1 /dev/$device >/dev/null 2>&1 && echo "      ✅ Write caching enabled for $device" || echo "      ⚠️  Could not enable write caching for $device"
-        fi
-    done
-    
-    # Defragment ext4 filesystems
-    echo "    🔧 Defragmenting filesystem..."
-    if command -v e4defrag >/dev/null 2>&1; then
-        sudo e4defrag / >/dev/null 2>&1 && echo "      ✅ Filesystem defragmented" || echo "      ⚠️  Defragmentation failed or not needed"
-    else
-        echo "      ⚠️  e4defrag not available, installing..."
-        sudo apt install -y e2fsprogs >/dev/null 2>&1 || echo "      ❌ Could not install e2fsprogs"
-    fi
-    
-    # Check and repair filesystem
-    echo "    🔧 Checking filesystem integrity..."
-    echo "      ℹ️  Filesystem check will run on next reboot"
-    sudo touch /forcefsck && echo "      ✅ Filesystem check scheduled for next boot"
-    
+done
+
+# Defragment ext4 filesystems
+echo "    🔧 Defragmenting filesystem..."
+if command -v e4defrag >/dev/null 2>&1; then
+    sudo e4defrag / >/dev/null 2>&1 && echo "      ✅ Filesystem defragmented" || echo "      ⚠️  Defragmentation failed or not needed"
 else
-    echo "  ❓ Unknown storage type, applying generic optimizations..."
-    if [ -x /usr/sbin/fstrim ]; then
-        sudo fstrim -v / >/dev/null 2>&1 && echo "    ✅ Generic trim completed" || echo "    ⚠️  Trim not supported"
-    fi
+    echo "      ⚠️  e4defrag not available, installing..."
+    sudo apt install -y e2fsprogs >/dev/null 2>&1 || echo "      ❌ Could not install e2fsprogs"
 fi
+
+# Check and repair filesystem
+echo "    🔧 Checking filesystem integrity..."
+echo "      ℹ️  Filesystem check will run on next reboot"
+sudo touch /forcefsck && echo "      ✅ Filesystem check scheduled for next boot"
 
 # Make scheduler changes persistent
 echo "  📝 Making I/O scheduler changes persistent..."
-if [ "$STORAGE_TYPE" = "ssd" ]; then
-    echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT elevator=noop"' | sudo tee -a /etc/default/grub.d/99-optimizer.cfg >/dev/null 2>&1
-    echo "    ✅ SSD scheduler will persist after reboot"
-elif [ "$STORAGE_TYPE" = "hdd" ]; then
-    echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT elevator=deadline"' | sudo tee -a /etc/default/grub.d/99-optimizer.cfg >/dev/null 2>&1
-    echo "    ✅ HDD scheduler will persist after reboot"
-fi
+echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT elevator=deadline"' | sudo tee -a /etc/default/grub.d/99-optimizer.cfg >/dev/null 2>&1
+echo "    ✅ HDD scheduler will persist after reboot"
 
 ### PART 12: Configure Filesystem Optimizations ###
 echo "🗂 Applying filesystem optimizations..."
@@ -720,10 +675,10 @@ echo "⏰ Completed at: $(date)"
 echo ""
 echo "🔁 REBOOT YOUR SYSTEM to apply all changes"
 echo "🏠 You'll automatically login to LXDE desktop"
-echo "� Performance boost script will run automatically on each boot"
+echo "💡 Performance boost script will run automatically on each boot"
 echo "🔧 Manual performance boost: sudo /usr/local/bin/performance-boost"
 echo "📋 Performance boost logs: /var/log/performance-boost.log"
 echo ""
 echo "🎯 Your Lubuntu system is now optimized for maximum performance!"
-echo "� Fork issues have been addressed for low-memory systems"
-echo "� Storage optimization applied based on detected drive type"
+echo "🔧 Fork issues have been addressed for low-memory systems"
+echo "💾 HDD-specific storage optimizations have been applied."
