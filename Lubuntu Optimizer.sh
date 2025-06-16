@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPT_VERSION="2.0.4"
+SCRIPT_VERSION="2.1.4"
 
 # Script version and error handling
 set -e
