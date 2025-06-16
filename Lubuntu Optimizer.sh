@@ -4,7 +4,7 @@ echo "🚀 Lubuntu Optimizer v$SCRIPT_VERSION"
 echo "🚀 Starting FINAL ultra optimization for Lubuntu..."
 echo "ℹ️  This script will keep LXDE and set up auto-login"
 echo "⏰ Started at: $(date)"
-#
+
 ### PART 0: System Information ###
 echo "🔍 System Information:"
 echo "  OS: $(lsb_release -d | cut -f2)"
@@ -151,7 +151,7 @@ echo "dash dash/sh boolean true" | sudo debconf-set-selections
 sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure dash && echo "    ✅ Dash configured" || echo "    ⚠️  Dash configuration failed"
 
 echo "  🌐 Setting lightweight default browser..."
-sudo update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/dillo 50 && echo "    ✅ Dillo set as default browser" || echo "    ⚠️  Browser alternative failed"
+sudo update-alternatives --install /usr/bin/x-www-browser x-www-browser /usr/bin/chromium-browser 50 && echo "    ✅ Chromium set as default browser" || echo "    ⚠️  Browser alternative failed"
 
 ### PART 8: Enable Swap if Missing ###
 echo "🧠 Checking swap configuration..."
@@ -160,7 +160,17 @@ if free | awk '/^Swap:/ {exit !$2}'; then
 else
     echo "  📝 Creating 1GB swap file..."
     SWAP_SIZE=${SWAP_SIZE:-1G}
-sudo fallocate -l "$SWAP_SIZE" /swapfile
+
+    # Check if there is enough free disk space
+    FREE_SPACE=$(df --output=avail / | tail -1)
+    REQUIRED_SPACE=$((1024 * 1024)) # 1GB in KB
+
+    if [ "$FREE_SPACE" -lt "$REQUIRED_SPACE" ]; then
+        echo "❌ Not enough disk space to create swap file. Free space: $(df -h / | tail -1 | awk '{print $4}')"
+        exit 1
+    fi
+
+    sudo fallocate -l "$SWAP_SIZE" /swapfile && echo "    ✅ Swap file allocated" || echo "    ❌ Swap file allocation failed"
     sudo chmod 600 /swapfile && echo "    ✅ Swap file permissions set" || echo "    ❌ Swap file permissions failed"
     sudo mkswap /swapfile && echo "    ✅ Swap file formatted" || echo "    ❌ Swap file format failed"
     sudo swapon /swapfile && echo "    ✅ Swap file activated" || echo "    ❌ Swap file activation failed"
