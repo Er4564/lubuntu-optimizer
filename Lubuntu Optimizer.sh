@@ -102,9 +102,60 @@ echo "⚡ Setting CPU governor to performance..."
 echo "  Current CPU governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo 'Unable to read')"
 
 # Install cpufrequtils for persistent governor setting
-sudo apt install -y cpufrequtils
-echo 'GOVERNOR="performance"' | sudo tee /etc/default/cpufrequtils
-sudo cpufreq-set -g performance
+sudo apt install -y cpufrequtils && echo "  ✅ cpufrequtils installed" || echo "  ❌ cpufrequtils installation failed"
+
+# Install auto-cpufreq for advanced CPU frequency management
+echo "  📦 Installing auto-cpufreq..."
+if ! command -v auto-cpufreq >/dev/null 2>&1; then
+    echo "    🔄 Downloading and installing auto-cpufreq..."
+    cd /tmp
+    git clone https://github.com/AdnanHodzic/auto-cpufreq.git || {
+        echo "    ⚠️  Git clone failed, trying snap installation..."
+        sudo snap install auto-cpufreq && echo "    ✅ auto-cpufreq installed via snap" || echo "    ❌ auto-cpufreq installation failed"
+    }
+    
+    if [ -d "/tmp/auto-cpufreq" ]; then
+        cd /tmp/auto-cpufreq
+        sudo ./auto-cpufreq-installer && echo "    ✅ auto-cpufreq installed" || echo "    ❌ auto-cpufreq installation failed"
+        cd - >/dev/null
+        rm -rf /tmp/auto-cpufreq
+    fi
+else
+    echo "    ✅ auto-cpufreq already installed"
+fi
+
+# Configure auto-cpufreq for performance
+echo "  ⚙️  Configuring auto-cpufreq for performance..."
+sudo tee /etc/auto-cpufreq.conf > /dev/null << 'EOF'
+# auto-cpufreq configuration for performance optimization
+[charger]
+governor = performance
+scaling_min_freq = 800000
+scaling_max_freq = 2500000
+turbo = auto
+
+[battery]
+governor = performance
+scaling_min_freq = 800000
+scaling_max_freq = 2000000
+turbo = auto
+EOF
+
+# Enable and start auto-cpufreq
+if command -v auto-cpufreq >/dev/null 2>&1; then
+    sudo auto-cpufreq --install && echo "    ✅ auto-cpufreq service installed and enabled" || echo "    ❌ auto-cpufreq service installation failed"
+fi
+
+# Set governor to performance (fallback)
+echo 'GOVERNOR="performance"' | sudo tee /etc/default/cpufrequtils > /dev/null
+echo "  📝 Set default governor to performance in /etc/default/cpufrequtils"
+
+# Apply immediately
+if command -v cpufreq-set >/dev/null; then
+    sudo cpufreq-set -g performance && echo "✅ CPU governor set to performance" || echo "❌ Failed to set CPU governor"
+else
+    echo "⚠️ cpufreq-set not available"
+fi
 
 ### PART 6: Disable Unused Services ###
 echo "🚫 Disabling unnecessary services..."
