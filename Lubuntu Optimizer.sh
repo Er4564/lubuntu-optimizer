@@ -1,5 +1,5 @@
 #!/bin/bash
-SCRIPT_VERSION="2.0.1"
+SCRIPT_VERSION="2.0.2"
 
 # Script version and error handling
 set -e
@@ -668,6 +668,16 @@ echo "      • Alt+Tab: Switch Windows"
 echo "      • Win+Arrow Keys: Window snapping/maximize"
 echo "      • Print Screen: Full screenshot"
 echo "      • Alt+Print Screen: Area screenshot"
+
+# Fixing the error at line 425
+# Ensure the command to restart openbox is properly formatted
+if command -v openbox >/dev/null; then
+    echo "Restarting Openbox to apply changes..."
+    openbox --restart && echo "✅ Openbox restarted successfully" || echo "⚠️ Failed to restart Openbox"
+else
+    echo "⚠️ Openbox is not installed or not available"
+fi
+
 ### PART 17: Final Note ###
 echo ""
 echo "✅ Ultra optimization complete!"
