@@ -245,6 +245,54 @@ for svc in "${SERVICES[@]}"; do
     fi
 done
 
+### PART 6.1: Analyze and Remove Unnecessary Running Services ###
+echo "🔍 Checking running services and disabling unnecessary ones..."
+
+# Define a list of essential services for a minimal LXDE system
+ESSENTIAL_SERVICES=(
+    "systemd-journald"
+    "systemd-logind"
+    "dbus"
+    "lightdm"
+    "networking"
+    "cron"
+    "rsyslog"
+    "polkit"
+    "udisks2"
+    "accounts-daemon"
+    "avahi-daemon"
+    "tlp"
+    "zram-config"
+    "cpufrequtils"
+    "auto-cpufreq"
+    "alsa-state"
+    "alsa-restore"
+    "getty@tty1"
+    "ssh"
+)
+
+# Get all running systemd services
+RUNNING_SERVICES=$(systemctl list-units --type=service --state=running --no-legend | awk '{print $1}' | sed 's/\.service$//')
+
+for svc in $RUNNING_SERVICES; do
+    IS_ESSENTIAL=0
+    for essential in "${ESSENTIAL_SERVICES[@]}"; do
+        if [[ "$svc" == "$essential" ]]; then
+            IS_ESSENTIAL=1
+            break
+        fi
+    done
+    if [ $IS_ESSENTIAL -eq 0 ]; then
+        echo "  🚫 $svc is not essential. Attempting to stop, disable, and mask..."
+        sudo systemctl stop "$svc" 2>/dev/null || true
+        sudo systemctl disable "$svc" 2>/dev/null || true
+        sudo systemctl mask "$svc" 2>/dev/null || true
+        echo "    ✅ $svc stopped, disabled, and masked."
+    else
+        echo "  ✅ $svc is essential and will be kept running."
+    fi
+done
+
 ### PART 7: Configure Lightweight Alternatives ###
 echo "🔧 Setting up lightweight alternatives..."
 echo "  🐚 Configuring dash as default shell..."
